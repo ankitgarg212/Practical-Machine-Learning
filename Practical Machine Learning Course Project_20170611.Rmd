@@ -1,0 +1,158 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Ankit Garg"
+date: "June 11, 2017"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Data
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Objective
+
+The goal of the project is to predict the manner in which they did the excercise. We will use the training data set to come up with the prediction model, which we will then apply to the test data set
+
+```{r data}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(randomForest)
+library(knitr)
+library(e1071)
+library(gbm)
+
+# Get data
+set.seed(11111)
+
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(url(trainUrl), na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(testUrl), na.strings=c("NA","#DIV/0!",""))
+
+# Partition the training data set into two to build and check the validation of the prediction model
+trainsub <- createDataPartition(training$classe, p=0.6, list=FALSE)
+subTraining <- training[trainsub, ]
+subTesting <- training[-trainsub, ]
+```
+
+## Cleaning data sets
+
+We will now clean the data sets to rid them of the variables that will unwanted noise in the model. We will also align the class type of the variables of the testing and the training data set so that we can apply the model. I have tried to break down the process and describe with each step what I am trying to achieve
+
+#### Removing the near zero variance variable
+
+```{r remove nzv}
+nzv <- nearZeroVar(subTraining, saveMetrics=TRUE)
+subTraining <- subTraining[,nzv$nzv==FALSE]
+
+nzv<- nearZeroVar(subTesting,saveMetrics=TRUE)
+subTesting <- subTesting[,nzv$nzv==FALSE]
+
+# Removing the index of the training data set as that will definitely not be a variable that can be used to predict
+subTraining <- subTraining[c(-1)]
+```
+
+#### Clean the variables with >= 70% NA values
+
+``` {r remove variables}
+trainingNA <- subTraining
+for(i in 1:length(subTraining)) {
+    if( sum( is.na( subTraining[, i] ) ) /nrow(subTraining) >= .7) {
+        for(j in 1:length(trainingNA)) {
+            if( length( grep(names(subTraining[i]), names(trainingNA)[j]) ) == 1)  {
+                trainingNA <- trainingNA[ , -j]
+            }   
+        } 
+    }
+}
+
+# Set back to the original variable name
+subTraining <- trainingNA
+
+# Transforming the subtesting and testing datasets by removing the same variables that we removed from the subtraining data set
+clean1 <- colnames(subTraining)
+clean2 <- colnames(subTraining[, -58])  # remove the classe column
+subTesting <- subTesting[clean1]         
+testing <- testing[clean2]             
+```
+
+#### We will now coerce the testing data set to have the same class types as the training data set
+
+```{r coerce}
+for (i in 1:length(testing) ) {
+    for(j in 1:length(subTraining)) {
+        if( length( grep(names(subTraining[i]), names(testing)[j]) ) == 1)  {
+            class(testing[j]) <- class(subTraining[i])
+        }      
+    }      
+}
+
+# To get the same class between testing and subTraining
+testing <- rbind(subTraining[2, -58] , testing)
+testing <- testing[-1,]
+```
+
+## Predict with Model 1: Decision trees
+
+```{r decision tree}
+set.seed(11111)
+model1 <- rpart(classe ~ ., data=subTraining, method="class")
+pred1 <- predict(model1, subTesting, type = "class")
+decisiontree <- confusionMatrix(pred1, subTesting$classe)
+decisiontree
+```
+
+```{r decision tree model accuracy}
+plot(decisiontree$table, col = decisiontree$byClass, main = paste("Decision Tree Confusion Matrix: Accuracy =", round(decisiontree$overall['Accuracy'], 4)))
+```
+
+## Predict with Model 2: Random Forest
+
+```{r random Forest}
+set.seed(11111)
+model2 <- randomForest(classe ~ ., data=subTraining)
+pred2 <- predict(model2, subTesting, type = "class")
+rf <- confusionMatrix(pred2, subTesting$classe)
+rf
+```
+
+```{r random Forest model accuracy}
+plot(rf$table, col = decisiontree$byClass, main = paste("Random Forest Confusion Matrix: Accuracy =", round(rf$overall['Accuracy'], 4)))
+```
+
+## Predict with Model 3: Generalized Boosted Regression
+
+```{r generalized boosted regression}
+fit <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+gbmmodel <- train(classe ~ ., data = subTraining, method = "gbm", trControl = fit, verbose = FALSE)
+model3 <- gbmmodel$finalModel
+pred3 <- predict(gbmmodel, newdata = subTesting)
+gbm <- confusionMatrix(pred3, subTesting$classe)
+gbm
+plot(gbm$table, col = gbm$byClass)
+```
+
+## Predict on the test data set
+As is evident from our models the most accurate prediction our made through random forest (Model 2), Accuracy was close to ~99.9%. Applying the model to the test data set
+
+```{r predict test}
+predicttest <- predict(model2, testing, type = "class")
+predicttest
+```
